@@ -1,0 +1,4 @@
+🔥 Feedback error: [Errno 13] Permission denied: 'SGDFeedback_Log.csv'
+Lately - Rufus Du sol 
+SGD Correct, Random forests Incorrect
+//
