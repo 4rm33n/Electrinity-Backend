@@ -1,10 +1,12 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
 import joblib
 import pandas as pd
 import traceback
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins":"*"}})
 
 # Load models and encoders
 rf_model = joblib.load('electrinity_model_rf_unbalanced.pkl')  # 🌟 Main model
@@ -15,6 +17,10 @@ camelot_encoder = joblib.load('electrinity_camelot_encoder_unbalanced.pkl')
 scaler = joblib.load('electrinity_scaler_unbalanced.pkl')
 features = joblib.load('electrinity_features_unbalanced.pkl')
 feature_means = joblib.load('electrinity_feature_means_unbalanced.pkl')  # Load default values for missing features
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}
 
 @app.route('/')
 def home():
@@ -82,6 +88,72 @@ def predict():
                                genre=None,
                                key_names=key_encoder.classes_,
                                camelot_names=camelot_encoder.classes_)
+    
+# 🎛️ JSON Prediction Endpoint
+@app.route('/api/predict', methods=['POST'])
+def api_predict():
+    try:
+        # 🎹 Get JSON data
+        data = request.get_json()
+        bpm = float(data['BPM'])
+        dance = float(data['Dance'])
+        energy = float(data['Energy'])
+        duration = float(data['Duration_sec'])
+        key_input = data['Key']
+        camelot_input = data['Camelot']
+
+        # 🔑 Encode inputs
+        encoded_key = key_encoder.transform([key_input])[0]
+        encoded_camelot = camelot_encoder.transform([camelot_input])[0]
+
+        # 🧮 Prepare input
+        input_dict = feature_means.copy()
+        input_dict.update({
+            'BPM': bpm,
+            'Dance': dance,
+            'Energy': energy,
+            'Key_encoded': encoded_key,
+            'Duration_sec': duration,
+            'Camelot_encoded': encoded_camelot
+        })
+
+        new_song_df = pd.DataFrame([input_dict])
+        scaled_array = scaler.transform(new_song_df)
+        scaled_song_df = pd.DataFrame(scaled_array, columns=new_song_df.columns)
+        scaled_song_df = scaled_song_df[features]
+
+        # 🌟 Predict with RandomForest
+        predicted_encoded = rf_model.predict(scaled_song_df)[0]
+        predicted_genre = le.inverse_transform([predicted_encoded])[0]
+
+        # 🧠 Predict with SGD (comparison/debugging)
+        predicted_encoded_sgd = sgd_model.predict(scaled_song_df)[0]
+        predicted_genre_sgd = le.inverse_transform([predicted_encoded_sgd])[0]
+
+        # ⚠️ Override logic if RF says "Other" but signals Hard Techno
+        overridden = False
+        if predicted_genre == "Other" and bpm >= 140 and energy >= 0.9:
+            print("⚠️ Overriding RF with SGD due to Hard Techno signal.")
+            predicted_genre = predicted_genre_sgd
+            overridden = True
+
+        # 🎿 Debugging prints
+        print("🎿 RF Prediction:", predicted_genre)
+        print("🧠 SGD Prediction:", predicted_genre_sgd)
+
+        # 📦 Return JSON response
+        return jsonify({
+            "genre_rf": predicted_genre,
+            "genre_sgd": predicted_genre_sgd,
+            "final_genre": predicted_genre,
+            "overridden": overridden
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "error": f"🔥 Prediction error: {str(e)}"
+        }), 400
 
 @app.route('/feedback', methods=['POST'])
 def feedback():
